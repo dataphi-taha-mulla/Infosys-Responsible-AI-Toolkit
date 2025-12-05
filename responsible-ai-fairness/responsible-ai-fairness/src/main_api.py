@@ -94,7 +94,7 @@ app.include_router(workbench_router, prefix='/api/v1', tags=['Infosys Responsibl
 
 if __name__ == "__main__":
     log.info("************************************main start******************************")
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    uvicorn.run(app, host="0.0.0.0", port=8001)
     log.info("************************************** main end ***************************************")
 
 

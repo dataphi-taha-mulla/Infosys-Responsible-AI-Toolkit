@@ -25,6 +25,9 @@ from app.constants import global_constants
 from abc import ABC
 from fastapi.exceptions import RequestValidationError
 
+from fastapi.responses import JSONResponse
+from fastapi.encoders import jsonable_encoder
+
 class aiShieldException(Exception, ABC):
     """
     dscription: Abstract base class of UsecaseException.

@@ -18,6 +18,9 @@ import json
 import datetime
 import time
 import os
+import logging
+log_2 = logging.getLogger(__name__)
+
 
 # import pdfkit
 import ast
@@ -2541,6 +2544,68 @@ class FairnessUIservice:
         response = llm_analysis_payload.value
 
         return response
+    
+    def _safe_parse_llm_json(self, result: str) -> dict:
+        if not result:
+            return {"bias": False, "message": "Empty LLM result"}
+
+        def clean_json_text(text: str) -> str:
+            """Remove invalid JSON escape sequences that LLMs sometimes add."""
+            # Replace invalid escape sequences: \' is not valid in JSON (only valid in Python strings)
+            # In JSON, single quotes inside double-quoted strings don't need escaping
+            text = text.replace("\\'", "'")
+            return text
+
+        # 1) First try to extract from markdown code blocks (```json ... ```)
+        markdown_match = re.search(r'```json\s*(.*?)\s*```', result, re.DOTALL)
+        if markdown_match:
+            try:
+                json_text = markdown_match.group(1).strip()
+                json_text = clean_json_text(json_text)
+                return json.loads(json_text)
+            except json.JSONDecodeError as e:
+                log_2.error(f"[FAIRNESS] JSON parse error from markdown block: {e}")
+        
+        # Also try generic code block (``` ... ```)
+        generic_markdown_match = re.search(r'```\s*(.*?)\s*```', result, re.DOTALL)
+        if generic_markdown_match:
+            try:
+                json_text = generic_markdown_match.group(1).strip()
+                # Skip if it starts with a language identifier
+                if not json_text.startswith('{'):
+                    lines = json_text.split('\n')
+                    if lines and not lines[0].strip().startswith('{'):
+                        json_text = '\n'.join(lines[1:])
+                json_text = clean_json_text(json_text)
+                return json.loads(json_text)
+            except json.JSONDecodeError:
+                pass
+
+        # 2) Try to take everything between the first '{' and the last '}'.
+        start = result.find("{")
+        end = result.rfind("}")
+        if start == -1 or end == -1 or end <= start:
+            log_2.error(f"[FAIRNESS] No JSON braces found in LLM output: {result!r}")
+            return {"bias": False, "message": "No JSON detected", "raw": result}
+
+        candidate = result[start : end + 1]
+        candidate = clean_json_text(candidate)
+
+        # 3) Normal JSON parse
+        try:
+            return json.loads(candidate)
+        except json.JSONDecodeError as e:
+            log_2.error(f"[FAIRNESS] JSON parse error: {e}. Candidate: {candidate!r}")
+
+        # 4) Try repairing single quotes → double quotes (LLM sometimes does that)
+        try:
+            repaired = candidate.replace("'", '"')
+            return json.loads(repaired)
+        except Exception as e:
+            log_2.error(f"[FAIRNESS] JSON parse repair failed: {e}. Raw: {result!r}")
+
+        # 5) Final fallback: treat as 'no bias' but keep raw text for debugging
+        return {"bias": False, "Bias score": "Low", "message": "Failed to parse LLM JSON", "raw": result}
 
     def get_analysis_llm(self, payload: dict):
         response = payload["response"]
@@ -2571,7 +2636,8 @@ class FairnessUIservice:
             # Use the LLM connection
             result = llm_connection.get_chat_completion(prompt, response)
 
-            return json.loads(result[result.find('{'): result.find('}')+1])
+            parsed = self._safe_parse_llm_json(result)
+            return parsed
 
         else:
             evaluator = evaluator.upper()
